@@ -1,0 +1,46 @@
+trainer:
+  max_epochs: 12
+  precision: "16-mixed"
+  gradient_clip_val: 0.1
+  callbacks:
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
+        dirpath: /lustre/home/vmoskov/checkpoints/coco_vit_baseline_m2f_large
+        save_top_k: 1
+        monitor: metrics/val_pq_all
+        mode: max
+        filename: best-{epoch:02d}
+        save_last: true
+  logger:
+    class_path: lightning.pytorch.loggers.wandb.WandbLogger
+    init_args:
+      resume: allow
+      project: "eomt"
+      name: "coco_panoptic_vit_baseline_m2f_large_640"
+model:
+  class_path: training.mask_classification_panoptic.MaskClassificationPanoptic
+  init_args:
+    attn_mask_annealing_enabled: False
+    num_classes: 133
+    img_size: [640, 640]
+    stuff_classes: [80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132]
+    lr: 1.0e-4
+    llrd: 0.8
+    llrd_l2_enabled: False
+    network:
+      class_path: models.vit_baseline_m2f.ViTBaselineM2F
+      init_args:
+        backbone_name: vit_large_patch14_reg4_dinov2
+        img_size: [640, 640]
+        patch_size: 14
+        num_classes: 133
+        num_queries: 200
+        feature_size: 256
+        hidden_dim: 256
+        encoder_layers: 6
+        decoder_layers: 10
+        dropout: 0.0
+data:
+  class_path: datasets.coco_panoptic.COCOPanoptic
+  init_args:
+    stuff_classes: [80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132]
