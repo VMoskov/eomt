@@ -1,7 +1,16 @@
 trainer:
   max_epochs: 12
-  precision: "32-true"
+  precision: "16-mixed"
   gradient_clip_val: 0.1
+  callbacks:
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
+        dirpath: /lustre/home/vmoskov/checkpoints/coco_vit_adapter_m2f_large
+        save_top_k: 1
+        monitor: metrics/val_pq_all
+        mode: max
+        filename: best-{epoch:02d}
+        save_last: true
   logger:
     class_path: lightning.pytorch.loggers.wandb.WandbLogger
     init_args:
