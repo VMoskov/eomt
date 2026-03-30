@@ -357,6 +357,10 @@ class ViTAdapterEncoder(nn.Module):
                 elif isinstance(module, (nn.LayerNorm, nn.BatchNorm2d)):
                     nn.init.constant_(module.bias, 0)
                     nn.init.constant_(module.weight, 1.0)
+                elif isinstance(module, nn.MultiheadAttention):
+                    trunc_normal_(module.in_proj_weight, std=0.02)
+                    if module.in_proj_bias is not None:
+                        nn.init.constant_(module.in_proj_bias, 0)
                 elif isinstance(module, (nn.Conv2d, nn.ConvTranspose2d)):
                     fan_out = (module.kernel_size[0] * module.kernel_size[1]
                                * module.out_channels // module.groups)
