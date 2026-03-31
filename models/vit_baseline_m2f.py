@@ -82,7 +82,6 @@ class ViTBaselineM2F(nn.Module):
         # ---- Class prediction head ----
         self.class_predictor = nn.Linear(hidden_dim, num_classes + 1)
 
-    @torch.compiler.disable()
     def forward(self, x: torch.Tensor):
         """
         x: (B, 3, H, W) float32 in [0, 1]  — normalisation handled by ViTPyramid

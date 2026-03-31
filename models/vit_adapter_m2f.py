@@ -112,7 +112,6 @@ class ViTAdapterM2F(nn.Module):
         self.register_buffer("pixel_mean", pixel_mean)
         self.register_buffer("pixel_std", pixel_std)
 
-    @torch.compiler.disable()  # Avoid CUDA graph capture issues with HuggingFace's custom ops
     def forward(self, x: torch.Tensor):
         """
         x: (B, 3, H, W) float32 in [0, 1]  — from LightningModule.forward (imgs/255)
