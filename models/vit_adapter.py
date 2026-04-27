@@ -2,8 +2,8 @@
 # Adapted from czczup/ViT-Adapter (adapter_modules.py + vit_adapter.py)
 # Original: Copyright (c) Shanghai AI Lab. All rights reserved.
 #
-# Modifications for DINOv2 (patch_size=14, prefix tokens) and
-# removal of mmcv/MSDeformAttn dependency (replaced with MHA).
+# Modifications for DINOv2 (patch_size=16 via FlexiViT, prefix tokens).
+# MSDeformAttn sourced from HuggingFace Transformers (no mmcv required).
 # ---------------------------------------------------------------
 
 import math
@@ -14,8 +14,20 @@ import timm
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from timm.models.layers import DropPath, trunc_normal_
+from timm.models.layers import DropPath, trunc_normal_, LayerNorm2d
 from torch.nn.init import normal_
+from transformers.models.mask2former.modeling_mask2former import (
+    Mask2FormerPixelDecoderEncoderMultiscaleDeformableAttention as MSDeformAttn,
+)
+
+
+def _make_grid_ref_points(h: int, w: int, n_levels: int, device, dtype) -> torch.Tensor:
+    """Returns (1, h*w, n_levels, 2) reference points normalized to [0, 1]."""
+    gy = (torch.arange(h, device=device, dtype=dtype) + 0.5) / h
+    gx = (torch.arange(w, device=device, dtype=dtype) + 0.5) / w
+    gy, gx = torch.meshgrid(gy, gx, indexing="ij")
+    pts = torch.stack([gx, gy], dim=-1).view(1, h * w, 1, 2)
+    return pts.expand(1, h * w, n_levels, 2).contiguous()
 
 
 # ---------------------------------------------------------------------------
@@ -36,29 +48,29 @@ class SpatialPriorModule(nn.Module):
         super().__init__()
         self.stem = nn.Sequential(
             nn.Conv2d(3, inplanes, kernel_size=3, stride=2, padding=1, bias=False),
-            nn.BatchNorm2d(inplanes),
+            nn.GroupNorm(32, inplanes),
             nn.ReLU(inplace=True),
             nn.Conv2d(inplanes, inplanes, kernel_size=3, stride=1, padding=1, bias=False),
-            nn.BatchNorm2d(inplanes),
+            nn.GroupNorm(32, inplanes),
             nn.ReLU(inplace=True),
             nn.Conv2d(inplanes, inplanes, kernel_size=3, stride=1, padding=1, bias=False),
-            nn.BatchNorm2d(inplanes),
+            nn.GroupNorm(32, inplanes),
             nn.ReLU(inplace=True),
             nn.MaxPool2d(kernel_size=3, stride=2, padding=1),
         )
         self.conv2 = nn.Sequential(
             nn.Conv2d(inplanes, 2 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
-            nn.BatchNorm2d(2 * inplanes),
+            nn.GroupNorm(32, 2 * inplanes),
             nn.ReLU(inplace=True),
         )
         self.conv3 = nn.Sequential(
             nn.Conv2d(2 * inplanes, 4 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
-            nn.BatchNorm2d(4 * inplanes),
+            nn.GroupNorm(32, 4 * inplanes),
             nn.ReLU(inplace=True),
         )
         self.conv4 = nn.Sequential(
             nn.Conv2d(4 * inplanes, 4 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
-            nn.BatchNorm2d(4 * inplanes),
+            nn.GroupNorm(32, 4 * inplanes),
             nn.ReLU(inplace=True),
         )
         self.fc1 = nn.Conv2d(inplanes, embed_dim, kernel_size=1, bias=True)
@@ -140,25 +152,28 @@ class ConvFFN(nn.Module):
 
 class Injector(nn.Module):
     """
-    Injects SPM multi-scale context into ViT patch tokens via cross-attention.
-    query = patch tokens  (B, N_patch, D)
+    Injects SPM multi-scale context into ViT patch tokens via MSDeformAttn.
+    query = patch tokens  (B, N_patch, D)   — queries sampling from 3 SPM scales
     feat  = c = cat[c2,c3,c4]  (B, N_spm, D)
-
-    Replaces original MSDeformAttn with standard nn.MultiheadAttention.
     """
 
     def __init__(self, dim: int, num_heads: int = 6, init_values: float = 0.):
         super().__init__()
         self.query_norm = nn.LayerNorm(dim)
         self.feat_norm = nn.LayerNorm(dim)
-        self.attn = nn.MultiheadAttention(dim, num_heads, batch_first=True)
+        self.attn = MSDeformAttn(dim, num_heads, n_levels=3, n_points=4)
         self.gamma = nn.Parameter(init_values * torch.ones(dim))
 
-    def forward(self, query: torch.Tensor, feat: torch.Tensor) -> torch.Tensor:
+    def forward(self, query: torch.Tensor, feat: torch.Tensor,
+                spm_sizes: list, H_patch: int, W_patch: int) -> torch.Tensor:
+        B = query.shape[0]
+        # (B, N_patch, n_levels=3, 2) — same ref point per level, one per patch token
+        ref = _make_grid_ref_points(H_patch, W_patch, 3, query.device, query.dtype).expand(B, -1, -1, -1)
         attn_out, _ = self.attn(
-            self.query_norm(query),
-            self.feat_norm(feat),
-            self.feat_norm(feat),
+            hidden_states=self.query_norm(query),
+            encoder_hidden_states=self.feat_norm(feat),
+            reference_points=ref,
+            spatial_shapes_list=spm_sizes,
         )
         return query + self.gamma * attn_out
 
@@ -169,12 +184,9 @@ class Injector(nn.Module):
 
 class Extractor(nn.Module):
     """
-    Extracts updated context from ViT patch tokens back into SPM features
-    via cross-attention.
-    query = c = cat[c2,c3,c4]  (B, N_spm, D)
-    feat  = patch tokens        (B, N_patch, D)
-
-    Replaces original MSDeformAttn with standard nn.MultiheadAttention.
+    Extracts updated context from ViT patch tokens back into SPM features via MSDeformAttn.
+    query = c = cat[c2,c3,c4]  (B, N_spm, D)  — SPM queries sampling from patch tokens
+    feat  = patch tokens        (B, N_patch, D)  — single-scale key/value
     """
 
     def __init__(self, dim: int, num_heads: int = 6, with_cffn: bool = True,
@@ -183,7 +195,7 @@ class Extractor(nn.Module):
         super().__init__()
         self.query_norm = norm_layer(dim)
         self.feat_norm = norm_layer(dim)
-        self.attn = nn.MultiheadAttention(dim, num_heads, batch_first=True)
+        self.attn = MSDeformAttn(dim, num_heads, n_levels=1, n_points=4)
         self.with_cffn = with_cffn
         if with_cffn:
             self.ffn = ConvFFN(in_features=dim,
@@ -192,11 +204,16 @@ class Extractor(nn.Module):
             self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
 
     def forward(self, query: torch.Tensor, feat: torch.Tensor,
-                spm_sizes: list) -> torch.Tensor:
+                spm_sizes: list, H_patch: int, W_patch: int) -> torch.Tensor:
+        B = query.shape[0]
+        # (B, N_spm, n_levels=1, 2) — one ref point per SPM token at its normalized position
+        parts = [_make_grid_ref_points(hs, ws, 1, query.device, query.dtype) for hs, ws in spm_sizes]
+        ref = torch.cat(parts, dim=1).expand(B, -1, -1, -1)
         attn_out, _ = self.attn(
-            self.query_norm(query),
-            self.feat_norm(feat),
-            self.feat_norm(feat),
+            hidden_states=self.query_norm(query),
+            encoder_hidden_states=self.feat_norm(feat),
+            reference_points=ref,
+            spatial_shapes_list=[(H_patch, W_patch)],
         )
         query = query + attn_out
         if self.with_cffn:
@@ -237,35 +254,25 @@ class InteractionBlock(nn.Module):
             self.extra_extractors = None
 
     def forward(self, tokens: torch.Tensor, c: torch.Tensor,
-                blocks: list, spm_sizes: list, num_prefix: int):
-        """
-        tokens:     (B, num_prefix + N_patch, D)  full ViT token sequence
-        c:          (B, N_spm, D)                 concatenated SPM features
-        blocks:     list of ViT blocks to run for this stage
-        spm_sizes:  [(h8,w8), (h16,w16), (h32,w32)]
-        num_prefix: number of prefix tokens (CLS + registers)
-
-        Returns:
-          tokens:  updated full token sequence
-          c:       updated SPM features
-        """
+                blocks: list, spm_sizes: list, num_prefix: int,
+                H_patch: int, W_patch: int):
         prefix = tokens[:, :num_prefix]
         patch = tokens[:, num_prefix:]
 
-        # Inject SPM context into patch tokens
-        patch = self.injector(query=patch, feat=c)
+        patch = self.injector(query=patch, feat=c, spm_sizes=spm_sizes,
+                              H_patch=H_patch, W_patch=W_patch)
 
-        # Run ViT blocks with full token sequence (prefix attends to patch and vice versa)
         tokens = torch.cat([prefix, patch], dim=1)
         for blk in blocks:
             tokens = blk(tokens)
 
-        # Extract updated context from post-block patch tokens into SPM
         patch = tokens[:, num_prefix:]
-        c = self.extractor(query=c, feat=patch, spm_sizes=spm_sizes)
+        c = self.extractor(query=c, feat=patch, spm_sizes=spm_sizes,
+                           H_patch=H_patch, W_patch=W_patch)
         if self.extra_extractors is not None:
             for extractor in self.extra_extractors:
-                c = extractor(query=c, feat=patch, spm_sizes=spm_sizes)
+                c = extractor(query=c, feat=patch, spm_sizes=spm_sizes,
+                              H_patch=H_patch, W_patch=W_patch)
 
         return tokens, c
 
@@ -309,6 +316,7 @@ class ViTAdapterEncoder(nn.Module):
             backbone_name,
             pretrained=ckpt_path is None,
             img_size=img_size,
+            patch_size=16,
             num_classes=0,
         )
         if ckpt_path is not None:
@@ -337,30 +345,36 @@ class ViTAdapterEncoder(nn.Module):
         ])
 
         self.up = nn.ConvTranspose2d(embed_dim, embed_dim, kernel_size=2, stride=2)
-        self.norm1 = nn.BatchNorm2d(embed_dim)
-        self.norm2 = nn.BatchNorm2d(embed_dim)
-        self.norm3 = nn.BatchNorm2d(embed_dim)
-        self.norm4 = nn.BatchNorm2d(embed_dim)
+        self.norm1 = LayerNorm2d(embed_dim)
+        self.norm2 = LayerNorm2d(embed_dim)
+        self.norm3 = LayerNorm2d(embed_dim)
+        self.norm4 = LayerNorm2d(embed_dim)
 
         self._init_adapter_weights()
 
     def _init_adapter_weights(self):
         """Initialise adapter components (SPM, interactions, up-conv).
         The backbone keeps its pretrained weights.
+        MSDeformAttn instances are skipped — they self-initialize in __init__.
         """
+        skip_ids = set()
         for m in [self.spm, self.interactions, self.up]:
             for module in m.modules():
+                if isinstance(module, MSDeformAttn):
+                    for sub in module.modules():
+                        skip_ids.add(id(sub))
+
+        for m in [self.spm, self.interactions, self.up]:
+            for module in m.modules():
+                if id(module) in skip_ids:
+                    continue
                 if isinstance(module, nn.Linear):
                     trunc_normal_(module.weight, std=0.02)
                     if module.bias is not None:
                         nn.init.constant_(module.bias, 0)
-                elif isinstance(module, (nn.LayerNorm, nn.BatchNorm2d)):
+                elif isinstance(module, (nn.LayerNorm, LayerNorm2d, nn.GroupNorm)):
                     nn.init.constant_(module.bias, 0)
                     nn.init.constant_(module.weight, 1.0)
-                elif isinstance(module, nn.MultiheadAttention):
-                    trunc_normal_(module.in_proj_weight, std=0.02)
-                    if module.in_proj_bias is not None:
-                        nn.init.constant_(module.in_proj_bias, 0)
                 elif isinstance(module, (nn.Conv2d, nn.ConvTranspose2d)):
                     fan_out = (module.kernel_size[0] * module.kernel_size[1]
                                * module.out_channels // module.groups)
@@ -399,7 +413,7 @@ class ViTAdapterEncoder(nn.Module):
         for i, interaction in enumerate(self.interactions):
             indexes = self.interaction_indexes[i]
             blocks = list(self.backbone.blocks[indexes[0]:indexes[-1] + 1])
-            tokens, c = interaction(tokens, c, blocks, spm_sizes, num_prefix)
+            tokens, c = interaction(tokens, c, blocks, spm_sizes, num_prefix, H_patch, W_patch)
             patch = tokens[:, num_prefix:]
             outs.append(patch.transpose(1, 2).view(B, -1, H_patch, W_patch))
 
