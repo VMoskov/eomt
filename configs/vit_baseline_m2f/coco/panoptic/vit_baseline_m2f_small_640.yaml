@@ -1,5 +1,5 @@
 trainer:
-  max_epochs: 24
+  max_epochs: 48
   precision: "16-mixed"
   gradient_clip_val: 0.1
   callbacks:

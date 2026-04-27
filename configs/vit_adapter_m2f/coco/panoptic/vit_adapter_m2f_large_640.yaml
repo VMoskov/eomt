@@ -1,7 +1,8 @@
 trainer:
-  max_epochs: 12
+  max_epochs: 24
   precision: "16-mixed"
   gradient_clip_val: 0.1
+  strategy: ddp_find_unused_parameters_true
   callbacks:
     - class_path: lightning.pytorch.callbacks.ModelCheckpoint
       init_args:
