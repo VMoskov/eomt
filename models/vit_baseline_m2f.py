@@ -5,11 +5,14 @@
 # Plugs into EoMT's LightningModule without any changes to existing code.
 # ---------------------------------------------------------------
 
+import math
+
 import torch
 import torch.nn as nn
 from transformers import Mask2FormerConfig
 from transformers.models.mask2former.modeling_mask2former import (
     Mask2FormerPixelDecoder,
+    Mask2FormerPixelDecoderEncoderMultiscaleDeformableAttention as MSDeformAttn,
     Mask2FormerTransformerModule,
 )
 
@@ -81,6 +84,31 @@ class ViTBaselineM2F(nn.Module):
 
         # ---- Class prediction head ----
         self.class_predictor = nn.Linear(hidden_dim, num_classes + 1)
+
+        self._init_decoder_weights()
+
+    def _init_decoder_weights(self):
+        """Fix HF's standalone init gaps: uninitialized level_embed and Kaiming MSDeformAttn."""
+        nn.init.zeros_(self.pixel_decoder.level_embed)
+
+        for module in self.pixel_decoder.modules():
+            if not isinstance(module, MSDeformAttn):
+                continue
+            nn.init.constant_(module.sampling_offsets.weight, 0.)
+            thetas = torch.arange(module.n_heads, dtype=torch.float32) * (2.0 * math.pi / module.n_heads)
+            grid_init = torch.stack([thetas.cos(), thetas.sin()], dim=-1)
+            grid_init = grid_init / grid_init.abs().max(dim=-1, keepdim=True).values
+            grid_init = grid_init.view(module.n_heads, 1, 1, 2).repeat(1, module.n_levels, module.n_points, 1)
+            for i in range(module.n_points):
+                grid_init[:, :, i, :] *= i + 1
+            with torch.no_grad():
+                module.sampling_offsets.bias = nn.Parameter(grid_init.view(-1))
+            nn.init.constant_(module.attention_weights.weight, 0.)
+            nn.init.constant_(module.attention_weights.bias, 0.)
+            nn.init.xavier_uniform_(module.value_proj.weight)
+            nn.init.constant_(module.value_proj.bias, 0.)
+            nn.init.xavier_uniform_(module.output_proj.weight)
+            nn.init.constant_(module.output_proj.bias, 0.)
 
     def forward(self, x: torch.Tensor):
         """

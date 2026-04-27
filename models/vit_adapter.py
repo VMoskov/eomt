@@ -189,13 +189,15 @@ class Extractor(nn.Module):
     feat  = patch tokens        (B, N_patch, D)  — single-scale key/value
     """
 
-    def __init__(self, dim: int, num_heads: int = 6, with_cffn: bool = True,
-                 cffn_ratio: float = 0.25, drop: float = 0., drop_path: float = 0.,
+    def __init__(self, dim: int, num_heads: int = 6, init_values: float = 0.,
+                 with_cffn: bool = True, cffn_ratio: float = 0.25,
+                 drop: float = 0., drop_path: float = 0.,
                  norm_layer=partial(nn.LayerNorm, eps=1e-6)):
         super().__init__()
         self.query_norm = norm_layer(dim)
         self.feat_norm = norm_layer(dim)
         self.attn = MSDeformAttn(dim, num_heads, n_levels=1, n_points=4)
+        self.gamma = nn.Parameter(init_values * torch.ones(dim))
         self.with_cffn = with_cffn
         if with_cffn:
             self.ffn = ConvFFN(in_features=dim,
@@ -215,7 +217,7 @@ class Extractor(nn.Module):
             reference_points=ref,
             spatial_shapes_list=[(H_patch, W_patch)],
         )
-        query = query + attn_out
+        query = query + self.gamma * attn_out
         if self.with_cffn:
             query = query + self.drop_path(self.ffn(self.ffn_norm(query), spm_sizes))
         return query
@@ -240,14 +242,14 @@ class InteractionBlock(nn.Module):
                  norm_layer=partial(nn.LayerNorm, eps=1e-6)):
         super().__init__()
         self.injector = Injector(dim=dim, num_heads=num_heads, init_values=init_values)
-        self.extractor = Extractor(dim=dim, num_heads=num_heads, with_cffn=with_cffn,
-                                   cffn_ratio=cffn_ratio, drop=drop, drop_path=drop_path,
-                                   norm_layer=norm_layer)
+        self.extractor = Extractor(dim=dim, num_heads=num_heads, init_values=init_values,
+                                   with_cffn=with_cffn, cffn_ratio=cffn_ratio,
+                                   drop=drop, drop_path=drop_path, norm_layer=norm_layer)
         if extra_extractor:
             self.extra_extractors = nn.Sequential(*[
-                Extractor(dim=dim, num_heads=num_heads, with_cffn=with_cffn,
-                          cffn_ratio=cffn_ratio, drop=drop, drop_path=drop_path,
-                          norm_layer=norm_layer)
+                Extractor(dim=dim, num_heads=num_heads, init_values=init_values,
+                          with_cffn=with_cffn, cffn_ratio=cffn_ratio,
+                          drop=drop, drop_path=drop_path, norm_layer=norm_layer)
                 for _ in range(2)
             ])
         else:
@@ -355,18 +357,19 @@ class ViTAdapterEncoder(nn.Module):
     def _init_adapter_weights(self):
         """Initialise adapter components (SPM, interactions, up-conv).
         The backbone keeps its pretrained weights.
-        MSDeformAttn instances are skipped — they self-initialize in __init__.
         """
-        skip_ids = set()
+        # Collect submodule IDs belonging to MSDeformAttn instances so we can
+        # apply the Deformable DETR init to them separately below.
+        msdeform_ids = set()
         for m in [self.spm, self.interactions, self.up]:
             for module in m.modules():
                 if isinstance(module, MSDeformAttn):
                     for sub in module.modules():
-                        skip_ids.add(id(sub))
+                        msdeform_ids.add(id(sub))
 
         for m in [self.spm, self.interactions, self.up]:
             for module in m.modules():
-                if id(module) in skip_ids:
+                if id(module) in msdeform_ids:
                     continue
                 if isinstance(module, nn.Linear):
                     trunc_normal_(module.weight, std=0.02)
@@ -381,6 +384,34 @@ class ViTAdapterEncoder(nn.Module):
                     module.weight.data.normal_(0, math.sqrt(2.0 / fan_out))
                     if module.bias is not None:
                         module.bias.data.zero_()
+
+        # Apply the standard Deformable DETR initialisation to every MSDeformAttn.
+        # The HF class does not call _reset_parameters() in __init__, leaving
+        # Kaiming-uniform weights that cause ~50% NaN on unlucky runs.
+        for m in [self.spm, self.interactions, self.up]:
+            for module in m.modules():
+                if not isinstance(module, MSDeformAttn):
+                    continue
+                nn.init.constant_(module.sampling_offsets.weight, 0.)
+                thetas = torch.arange(module.n_heads, dtype=torch.float32) * (
+                    2.0 * math.pi / module.n_heads
+                )
+                grid_init = torch.stack([thetas.cos(), thetas.sin()], dim=-1)
+                grid_init = grid_init / grid_init.abs().max(dim=-1, keepdim=True).values
+                grid_init = grid_init.view(module.n_heads, 1, 1, 2).repeat(
+                    1, module.n_levels, module.n_points, 1
+                )
+                for i in range(module.n_points):
+                    grid_init[:, :, i, :] *= i + 1
+                with torch.no_grad():
+                    module.sampling_offsets.bias = nn.Parameter(grid_init.view(-1))
+                nn.init.constant_(module.attention_weights.weight, 0.)
+                nn.init.constant_(module.attention_weights.bias, 0.)
+                nn.init.xavier_uniform_(module.value_proj.weight)
+                nn.init.constant_(module.value_proj.bias, 0.)
+                nn.init.xavier_uniform_(module.output_proj.weight)
+                nn.init.constant_(module.output_proj.bias, 0.)
+
         normal_(self.level_embed)
 
     def forward(self, x: torch.Tensor) -> list:
