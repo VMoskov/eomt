@@ -126,13 +126,9 @@ class ViTAdapterM2F(nn.Module):
         # ImageNet normalisation
         x = (x - self.pixel_mean) / self.pixel_std
 
-        # ViT-Adapter encoder runs in fp16 (AMP handles this)
-        # → [f1(s4), f2(s8), f3(s16), f4(s32)]
-        features = self.encoder(x)
-
-        # HuggingFace pixel + transformer decoder run in fp32 — MSDA overflows in fp16
+        # Entire forward runs in fp32 — MSDeformAttn in both encoder and decoder overflows in fp16
         with torch.autocast(device_type="cuda", enabled=False):
-            features = [f.float() for f in features]
+            features = self.encoder(x)
             pix_out = self.pixel_decoder(features)
             trans_out = self.transformer_module(
                 multi_scale_features=list(pix_out.multi_scale_features),
