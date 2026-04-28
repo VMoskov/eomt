@@ -123,7 +123,7 @@ class ViTBaselineM2F(nn.Module):
         features = self.encoder(x.float())  # [f4, f8, f16, f32]
 
         # HuggingFace pixel + transformer decoder run in fp32 — MSDA overflows in fp16
-        with torch.autocast(device_type="cuda", enabled=False):
+        with torch.autocast(device_type="cuda", dtype=torch.float32):
             features = [f.float() for f in features]
             pix_out = self.pixel_decoder(features)
             trans_out = self.transformer_module(

@@ -158,7 +158,7 @@ class ViTAdapterM2F(nn.Module):
         x = (x - self.pixel_mean) / self.pixel_std
 
         # Entire forward runs in fp32 — MSDeformAttn in both encoder and decoder overflows in fp16
-        with torch.autocast(device_type="cuda", enabled=False):
+        with torch.autocast(device_type="cuda", dtype=torch.float32):
             features = self.encoder(x)
             pix_out = self.pixel_decoder(features)
             trans_out = self.transformer_module(
