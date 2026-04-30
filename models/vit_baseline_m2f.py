@@ -119,19 +119,14 @@ class ViTBaselineM2F(nn.Module):
           mask_logits:  (B, num_queries, H/4, W/4)
           class_logits: (B, num_queries, num_classes+1)
         """
-        # ViTPyramid encoder runs in fp16 (AMP handles this)
-        features = self.encoder(x.float())  # [f4, f8, f16, f32]
-
-        # HuggingFace pixel + transformer decoder run in fp32 — MSDA overflows in fp16
-        with torch.autocast(device_type="cuda", dtype=torch.float32):
-            features = [f.float() for f in features]
-            pix_out = self.pixel_decoder(features)
-            trans_out = self.transformer_module(
-                multi_scale_features=list(pix_out.multi_scale_features),
-                mask_features=pix_out.mask_features,
-                output_hidden_states=False,
-            )
-            class_logits = self.class_predictor(trans_out.last_hidden_state)
-            mask_logits = trans_out.masks_queries_logits[-1]
+        features = self.encoder(x)
+        pix_out = self.pixel_decoder(features)
+        trans_out = self.transformer_module(
+            multi_scale_features=list(pix_out.multi_scale_features),
+            mask_features=pix_out.mask_features,
+            output_hidden_states=False,
+        )
+        class_logits = self.class_predictor(trans_out.last_hidden_state)
+        mask_logits = trans_out.masks_queries_logits[-1]
 
         return [mask_logits], [class_logits]
