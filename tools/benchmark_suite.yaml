@@ -1,0 +1,88 @@
+# Benchmark suite — run with:
+#   python tools/benchmark_fps.py --suite tools/benchmark_suite.yaml
+#
+# EoMT checkpoints are stored under wandb run IDs inside the project directory.
+# Checkpoint epoch doesn't affect FPS — architecture is identical regardless.
+
+models:
+
+  # ── EoMT — COCO panoptic ─────────────────────────────────────────────────
+
+  - name: "EoMT-S COCO panoptic"
+    config: configs/dinov2/coco/panoptic/eomt_small_640.yaml
+    ckpt: /lustre/home/vmoskov/eomt/eomt/fu4wxe49/checkpoints/epoch=23-step=177408.ckpt
+    data_path: /lustre/home/vmoskov/datasets/coco
+
+  - name: "EoMT-B COCO panoptic"
+    config: configs/dinov2/coco/panoptic/eomt_base_640.yaml
+    ckpt: /lustre/home/vmoskov/eomt/eomt/iy0yx6p6/checkpoints/epoch=23-step=177408.ckpt
+    data_path: /lustre/home/vmoskov/datasets/coco
+
+  - name: "EoMT-L COCO panoptic"
+    config: configs/dinov2/coco/panoptic/eomt_large_640.yaml
+    ckpt: /lustre/home/vmoskov/eomt/eomt/6mh00rha/checkpoints/epoch=11-step=88704.ckpt
+    data_path: /lustre/home/vmoskov/datasets/coco
+
+  # ── ViT-Baseline M2F — COCO panoptic ──────────────────────────────────────
+
+  - name: "ViT-Baseline-S COCO panoptic"
+    config: configs/vit_baseline_m2f/coco/panoptic/vit_baseline_m2f_small_640.yaml
+    ckpt: /lustre/home/vmoskov/checkpoints/coco_vit_baseline_m2f_small/best-epoch=47.ckpt
+    data_path: /lustre/home/vmoskov/datasets/coco
+
+  - name: "ViT-Baseline-B COCO panoptic"
+    config: configs/vit_baseline_m2f/coco/panoptic/vit_baseline_m2f_base_640.yaml
+    ckpt: /lustre/home/vmoskov/checkpoints/coco_vit_baseline_m2f_base/best-epoch=47.ckpt
+    data_path: /lustre/home/vmoskov/datasets/coco
+
+  - name: "ViT-Baseline-L COCO panoptic"
+    config: configs/vit_baseline_m2f/coco/panoptic/vit_baseline_m2f_large_640.yaml
+    ckpt: /lustre/home/vmoskov/checkpoints/coco_vit_baseline_m2f_large/best-epoch=46-v1.ckpt
+    data_path: /lustre/home/vmoskov/datasets/coco
+
+  # ── ViT-Adapter M2F — COCO panoptic ──────────────────────────────────────
+
+  - name: "ViT-Adapter-S COCO panoptic"
+    config: configs/vit_adapter_m2f/coco/panoptic/vit_adapter_m2f_small_640.yaml
+    ckpt: /lustre/home/vmoskov/checkpoints/coco_vit_adapter_m2f_small/best-epoch=95.ckpt
+    data_path: /lustre/home/vmoskov/datasets/coco
+
+  - name: "ViT-Adapter-B COCO panoptic"
+    config: configs/vit_adapter_m2f/coco/panoptic/vit_adapter_m2f_base_640.yaml
+    ckpt: /lustre/home/vmoskov/checkpoints/coco_vit_adapter_m2f_base/best-epoch=93.ckpt
+    data_path: /lustre/home/vmoskov/datasets/coco
+
+  - name: "ViT-Adapter-L COCO panoptic"
+    config: configs/vit_adapter_m2f/coco/panoptic/vit_adapter_m2f_large_640.yaml
+    ckpt: /lustre/home/vmoskov/checkpoints/coco_vit_adapter_m2f_large/best-epoch=47.ckpt
+    data_path: /lustre/home/vmoskov/datasets/coco
+
+  # ── ADE20K semantic ───────────────────────────────────────────────────────
+
+  - name: "EoMT-S ADE20K semantic"
+    config: configs/dinov2/ade20k/semantic/eomt_small_512.yaml
+    ckpt: /lustre/home/vmoskov/eomt/eomt/10pc5qfm/checkpoints/epoch=61-step=313038.ckpt
+    data_path: /lustre/home/vmoskov/datasets/ade20k/semantic
+
+  - name: "EoMT-B ADE20K semantic"
+    config: configs/dinov2/ade20k/semantic/eomt_base_512.yaml
+    ckpt: /lustre/home/vmoskov/eomt/eomt/h1e8m9q8/checkpoints/epoch=43-step=222156.ckpt
+    data_path: /lustre/home/vmoskov/datasets/ade20k/semantic
+
+  - name: "ViT-Adapter-B ADE20K semantic"
+    config: configs/vit_adapter_m2f/ade20k/semantic/vit_adapter_m2f_base_512.yaml
+    ckpt: /lustre/home/vmoskov/checkpoints/ade20k_vit_adapter_m2f_base/best-epoch=56.ckpt
+    data_path: /lustre/home/vmoskov/datasets/ade20k/semantic
+    windowed_inference: false
+
+  - name: "ViT-Adapter-L ADE20K (normal)"
+    config: configs/vit_adapter_m2f/ade20k/semantic/vit_adapter_m2f_large_512.yaml
+    ckpt: /lustre/home/vmoskov/checkpoints/ade20k_vit_adapter_m2f_large_512/best-epoch=60.ckpt
+    data_path: /lustre/home/vmoskov/datasets/ade20k/semantic
+    windowed_inference: false
+
+  - name: "ViT-Adapter-L ADE20K (windowed)"
+    config: configs/vit_adapter_m2f/ade20k/semantic/vit_adapter_m2f_large_512.yaml
+    ckpt: /lustre/home/vmoskov/checkpoints/ade20k_vit_adapter_m2f_large_512/best-epoch=60.ckpt
+    data_path: /lustre/home/vmoskov/datasets/ade20k/semantic
+    windowed_inference: true

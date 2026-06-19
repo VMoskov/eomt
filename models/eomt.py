@@ -23,12 +23,16 @@ class EoMT(nn.Module):
         num_q,
         num_blocks=4,
         masked_attn_enabled=True,
+        freeze_backbone: bool = False,
     ):
         super().__init__()
         self.encoder = encoder
         self.num_q = num_q
         self.num_blocks = num_blocks
         self.masked_attn_enabled = masked_attn_enabled
+
+        if freeze_backbone:
+            self.encoder.backbone.requires_grad_(False)
 
         self.register_buffer("attn_mask_probs", torch.ones(num_blocks))
 
@@ -51,6 +55,11 @@ class EoMT(nn.Module):
         self.upscale = nn.Sequential(
             *[ScaleBlock(self.encoder.backbone.embed_dim) for _ in range(num_upscale)],
         )
+
+        if freeze_backbone:
+            frozen = sum(p.numel() for p in self.encoder.backbone.parameters())
+            trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
+            print(f"[EoMT] freeze_backbone=True — frozen: {frozen:,}  trainable: {trainable:,}")
 
     def _predict(self, x: torch.Tensor):
         q = x[:, : self.num_q, :]
