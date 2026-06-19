@@ -1,7 +1,8 @@
 trainer:
-  max_epochs: 62
+  max_epochs: 63
   precision: "bf16-mixed"
-  gradient_clip_val: 0.1
+  gradient_clip_val: 0.01
+  strategy: ddp_find_unused_parameters_true
   callbacks:
     - class_path: lightning.pytorch.callbacks.ModelCheckpoint
       init_args:
@@ -21,6 +22,7 @@ model:
   class_path: training.mask_classification_semantic.MaskClassificationSemantic
   init_args:
     attn_mask_annealing_enabled: False
+    windowed_inference: false
     num_classes: 150
     img_size: [512, 512]
     lr: 1.0e-4
@@ -41,7 +43,7 @@ model:
         cffn_ratio: 0.25
         add_vit_feature: True
         use_extra_extractor: True
-        drop_path_rate: 0.0
+        drop_path_rate: 0.2
         feature_size: 256
         hidden_dim: 256
         encoder_layers: 6
@@ -49,3 +51,6 @@ model:
         dropout: 0.0
 data:
   class_path: datasets.ade20k_semantic.ADE20KSemantic
+  init_args:
+    img_size: [512, 512]
+    batch_size: 4

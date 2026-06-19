@@ -1,5 +1,5 @@
 trainer:
-  max_epochs: 48
+  max_epochs: 96
   precision: "bf16-mixed"
   gradient_clip_val: 0.1
   strategy: ddp_find_unused_parameters_true

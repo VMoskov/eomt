@@ -1,7 +1,7 @@
 trainer:
   max_epochs: 48
   precision: "bf16-mixed"
-  gradient_clip_val: 0.1
+  gradient_clip_val: 0.01
   strategy: ddp_find_unused_parameters_true
   callbacks:
     - class_path: lightning.pytorch.callbacks.ModelCheckpoint
@@ -43,7 +43,7 @@ model:
         cffn_ratio: 0.25
         add_vit_feature: True
         use_extra_extractor: True
-        drop_path_rate: 0.0
+        drop_path_rate: 0.2
         feature_size: 256
         hidden_dim: 256
         encoder_layers: 6
