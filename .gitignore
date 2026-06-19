@@ -180,3 +180,5 @@ cython_debug/
 .pypirc
 
 .claude/
+
+tools/usage/*.txt
