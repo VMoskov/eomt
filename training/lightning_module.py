@@ -56,6 +56,8 @@ class LightningModule(lightning.LightningModule):
         weight_decay: float,
         poly_power: float,
         warmup_steps: tuple[int, int],
+        step_milestones: list = None,
+        step_gamma: float = 0.1,
         ckpt_path=None,
         delta_weights=False,
         load_ckpt_class_head=True,
@@ -74,6 +76,8 @@ class LightningModule(lightning.LightningModule):
         self.weight_decay = weight_decay
         self.poly_power = poly_power
         self.warmup_steps = warmup_steps
+        self.step_milestones = step_milestones
+        self.step_gamma = step_gamma
         self.llrd_l2_enabled = llrd_l2_enabled
 
         self.strict_loading = False
@@ -157,6 +161,8 @@ class LightningModule(lightning.LightningModule):
             warmup_steps=self.warmup_steps,
             total_steps=self.trainer.estimated_stepping_batches,
             poly_power=self.poly_power,
+            step_milestones=self.step_milestones,
+            step_gamma=self.step_gamma,
         )
 
         return {
