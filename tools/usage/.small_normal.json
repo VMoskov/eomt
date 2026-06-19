@@ -1,0 +1,27 @@
+{
+  "config": "configs/vit_adapter_m2f/coco/panoptic/vit_adapter_m2f_small_640.yaml",
+  "img_size": [
+    640,
+    640
+  ],
+  "fwd_peaks_gb": [
+    0.65883392,
+    1.137278464,
+    1.607543808,
+    2.071573504
+  ],
+  "fwd_per_sample_avg_gb": 0.4709131946666667,
+  "bwd_peaks_gb": [
+    4.218085376,
+    8.332568576,
+    12.39020032,
+    16.438818304
+  ],
+  "bwd_per_sample_avg_gb": 4.073577642666667,
+  "component_deltas_mb": {
+    "encoder.spm": 53.362688,
+    "encoder": 52.23168,
+    "pixel_decoder": 16.203776,
+    "transformer_module": 210.35264
+  }
+}
