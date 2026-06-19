@@ -41,6 +41,7 @@ class MaskClassificationSemantic(LightningModule):
         ckpt_path: Optional[str] = None,
         delta_weights: bool = False,
         load_ckpt_class_head: bool = True,
+        windowed_inference: bool = True,
     ):
         super().__init__(
             network=network,
@@ -66,6 +67,7 @@ class MaskClassificationSemantic(LightningModule):
         self.ignore_idx = ignore_idx
         self.mask_thresh = mask_thresh
         self.overlap_thresh = overlap_thresh
+        self.windowed_inference = windowed_inference
         self.stuff_classes = range(num_classes)
 
         self.criterion = MaskClassificationLoss(
@@ -90,24 +92,42 @@ class MaskClassificationSemantic(LightningModule):
         imgs, targets = batch
 
         img_sizes = [img.shape[-2:] for img in imgs]
-        crops, origins = self.window_imgs_semantic(imgs)
-        mask_logits_per_layer, class_logits_per_layer = self(crops)
-
         targets = self.to_per_pixel_targets_semantic(targets, self.ignore_idx)
 
-        for i, (mask_logits, class_logits) in enumerate(
-            list(zip(mask_logits_per_layer, class_logits_per_layer))
-        ):
-            mask_logits = F.interpolate(mask_logits, self.img_size, mode="bilinear")
-            crop_logits = self.to_per_pixel_logits_semantic(mask_logits, class_logits)
-            logits = self.revert_window_logits_semantic(crop_logits, origins, img_sizes)
+        if self.windowed_inference:
+            crops, origins = self.window_imgs_semantic(imgs)
+            mask_logits_per_layer, class_logits_per_layer = self(crops)
 
-            self.update_metrics_semantic(logits, targets, i)
+            for i, (mask_logits, class_logits) in enumerate(
+                list(zip(mask_logits_per_layer, class_logits_per_layer))
+            ):
+                mask_logits = F.interpolate(mask_logits, self.img_size, mode="bilinear")
+                crop_logits = self.to_per_pixel_logits_semantic(mask_logits, class_logits)
+                logits = self.revert_window_logits_semantic(crop_logits, origins, img_sizes)
 
-            if batch_idx == 0:
-                self.plot_semantic(
-                    imgs[0], targets[0], logits[0], log_prefix, i, batch_idx
-                )
+                self.update_metrics_semantic(logits, targets, i)
+
+                if batch_idx == 0:
+                    self.plot_semantic(
+                        imgs[0], targets[0], logits[0], log_prefix, i, batch_idx
+                    )
+        else:
+            transformed_imgs = self.resize_and_pad_imgs_instance_panoptic(imgs)
+            mask_logits_per_layer, class_logits_per_layer = self(transformed_imgs)
+
+            for i, (mask_logits, class_logits) in enumerate(
+                list(zip(mask_logits_per_layer, class_logits_per_layer))
+            ):
+                mask_logits = F.interpolate(mask_logits, self.img_size, mode="bilinear")
+                pixel_logits = self.to_per_pixel_logits_semantic(mask_logits, class_logits)
+                logits = self.revert_resize_and_pad_logits_instance_panoptic(pixel_logits, img_sizes)
+
+                self.update_metrics_semantic(logits, targets, i)
+
+                if batch_idx == 0:
+                    self.plot_semantic(
+                        imgs[0], targets[0], logits[0], log_prefix, i, batch_idx
+                    )
 
     def on_validation_epoch_end(self):
         self._on_eval_epoch_end_semantic("val")
