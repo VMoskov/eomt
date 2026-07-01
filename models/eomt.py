@@ -12,7 +12,37 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 
+import timm
+
 from models.scale_block import ScaleBlock
+
+
+class ConvNeXtCrossAttn(nn.Module):
+    def __init__(self, img_dim: int, convnext_dim: int, num_heads: int, zero_init: bool = True):
+        super().__init__()
+        self.norm_img = nn.LayerNorm(img_dim)
+        self.norm_convnext = nn.LayerNorm(convnext_dim)
+        self.cross_attn = nn.MultiheadAttention(
+            embed_dim=img_dim,
+            kdim=convnext_dim,
+            vdim=convnext_dim,
+            num_heads=num_heads,
+            batch_first=True,
+        )
+        self.fc = nn.Linear(img_dim, img_dim)
+        if zero_init:
+            nn.init.zeros_(self.fc.weight)
+            nn.init.zeros_(self.fc.bias)
+
+    def forward(self, img_tokens: torch.Tensor, convnext_feats: torch.Tensor) -> torch.Tensor:
+        # img_tokens:     [B, N_img, img_dim]           — ViT image tokens (Q)
+        # convnext_feats: [B, H/4·W/4, convnext_dim]   — ConvNeXt stage-1 (K, V)
+        attn_out, _ = self.cross_attn(
+            self.norm_img(img_tokens),
+            self.norm_convnext(convnext_feats),
+            self.norm_convnext(convnext_feats),
+        )
+        return img_tokens + self.fc(attn_out)
 
 
 class EoMT(nn.Module):
@@ -24,12 +54,18 @@ class EoMT(nn.Module):
         num_blocks=4,
         masked_attn_enabled=True,
         freeze_backbone: bool = False,
+        convnext_backbone_name: Optional[str] = None,
+        convnext_mode: Optional[str] = None,
+        convnext_num_heads: int = 8,
+        convnext_zero_init: bool = True,
+        convnext_out_index: int = 0,
     ):
         super().__init__()
         self.encoder = encoder
         self.num_q = num_q
         self.num_blocks = num_blocks
         self.masked_attn_enabled = masked_attn_enabled
+        self.convnext_mode = convnext_mode
 
         if freeze_backbone:
             self.encoder.backbone.requires_grad_(False)
@@ -55,6 +91,31 @@ class EoMT(nn.Module):
         self.upscale = nn.Sequential(
             *[ScaleBlock(self.encoder.backbone.embed_dim) for _ in range(num_upscale)],
         )
+
+        # ConvNeXt cross-attention (optional)
+        if convnext_backbone_name is not None:
+            self.convnext_backbone = timm.create_model(
+                convnext_backbone_name, pretrained=True, features_only=True, out_indices=[convnext_out_index]
+            )
+            self.convnext_backbone.requires_grad_(False)
+            convnext_dim = self.convnext_backbone.feature_info[convnext_out_index]["num_chs"]
+            embed_dim = self.encoder.backbone.embed_dim
+
+            if convnext_mode in ("before", "after", "each_shared"):
+                self.convnext_cross_attn = ConvNeXtCrossAttn(
+                    embed_dim, convnext_dim, convnext_num_heads, convnext_zero_init
+                )
+            elif convnext_mode == "each_individual":
+                n_l1 = len(encoder.backbone.blocks) - num_blocks
+                self.convnext_cross_attn = nn.ModuleList([
+                    ConvNeXtCrossAttn(embed_dim, convnext_dim, convnext_num_heads, convnext_zero_init)
+                    for _ in range(n_l1)
+                ])
+            else:
+                raise ValueError(f"Unknown convnext_mode: {convnext_mode!r}")
+        else:
+            self.convnext_backbone = None
+            self.convnext_cross_attn = None
 
         if freeze_backbone:
             frozen = sum(p.numel() for p in self.encoder.backbone.parameters())
@@ -159,6 +220,14 @@ class EoMT(nn.Module):
     def forward(self, x: torch.Tensor):
         x = (x - self.encoder.pixel_mean) / self.encoder.pixel_std
 
+        # Extract ConvNeXt stage-1 features from normalized image (same ImageNet stats)
+        if self.convnext_backbone is not None:
+            with torch.no_grad():
+                convnext_feats = self.convnext_backbone(x)[0]  # [B, convnext_dim, H/4, W/4]
+            convnext_feats = convnext_feats.flatten(2).transpose(1, 2)  # [B, H/4·W/4, convnext_dim]
+        else:
+            convnext_feats = None
+
         rope = None
         if hasattr(self.encoder.backbone, "rope_embeddings"):
             rope = self.encoder.backbone.rope_embeddings(x)
@@ -168,18 +237,27 @@ class EoMT(nn.Module):
         if hasattr(self.encoder.backbone, "_pos_embed"):
             x = self.encoder.backbone._pos_embed(x)
 
+        # "before": enrich image tokens once before any L1 block runs
+        if self.convnext_mode == "before":
+            x = self.convnext_cross_attn(x, convnext_feats)
+
         attn_mask = None
         mask_logits_per_layer, class_logits_per_layer = [], []
 
+        n_l1 = len(self.encoder.backbone.blocks) - self.num_blocks
+
         for i, block in enumerate(self.encoder.backbone.blocks):
-            if i == len(self.encoder.backbone.blocks) - self.num_blocks:
+            if i == n_l1:
+                # "after": enrich image tokens after all L1, before EoMT queries join
+                if self.convnext_mode == "after":
+                    x = self.convnext_cross_attn(x, convnext_feats)
                 x = torch.cat(
                     (self.q.weight[None, :, :].expand(x.shape[0], -1, -1), x), dim=1
                 )
 
             if (
                 self.masked_attn_enabled
-                and i >= len(self.encoder.backbone.blocks) - self.num_blocks
+                and i >= n_l1
             ):
                 mask_logits, class_logits = self._predict(self.encoder.backbone.norm(x))
                 mask_logits_per_layer.append(mask_logits)
@@ -202,6 +280,13 @@ class EoMT(nn.Module):
                 x = x + block.ls2(mlp_out)
             elif hasattr(block, "layer_scale2"):
                 x = x + block.layer_scale2(mlp_out)
+
+            # "each": enrich image tokens after each L1 block (never after L2 starts)
+            if i < n_l1:
+                if self.convnext_mode == "each_shared":
+                    x = self.convnext_cross_attn(x, convnext_feats)
+                elif self.convnext_mode == "each_individual":
+                    x = self.convnext_cross_attn[i](x, convnext_feats)
 
         mask_logits, class_logits = self._predict(self.encoder.backbone.norm(x))
         mask_logits_per_layer.append(mask_logits)
