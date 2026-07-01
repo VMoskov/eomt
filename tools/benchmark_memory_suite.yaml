@@ -1,0 +1,39 @@
+# Memory benchmark suite — run with:
+#   python tools/benchmark_memory.py --suite tools/benchmark_memory_suite.yaml
+#
+# No checkpoints needed — random weights are sufficient for memory measurement.
+
+models:
+
+  # ── EoMT ──────────────────────────────────────────────────────────────────
+
+  - name: "EoMT-S"
+    config: configs/dinov2/coco/panoptic/eomt_small_640.yaml
+
+  - name: "EoMT-B"
+    config: configs/dinov2/coco/panoptic/eomt_base_640.yaml
+
+  - name: "EoMT-L"
+    config: configs/dinov2/coco/panoptic/eomt_large_640.yaml
+
+  # ── ViT-Adapter + M2F ─────────────────────────────────────────────────────
+
+  - name: "ViT-Adapter-S"
+    config: configs/vit_adapter_m2f/coco/panoptic/vit_adapter_m2f_small_640.yaml
+
+  - name: "ViT-Adapter-B"
+    config: configs/vit_adapter_m2f/coco/panoptic/vit_adapter_m2f_base_640.yaml
+
+  - name: "ViT-Adapter-L"
+    config: configs/vit_adapter_m2f/coco/panoptic/vit_adapter_m2f_large_640.yaml
+
+  # ── ViT-Baseline + M2F ────────────────────────────────────────────────────
+
+  - name: "ViT-Baseline-S"
+    config: configs/vit_baseline_m2f/coco/panoptic/vit_baseline_m2f_small_640.yaml
+
+  - name: "ViT-Baseline-B"
+    config: configs/vit_baseline_m2f/coco/panoptic/vit_baseline_m2f_base_640.yaml
+
+  - name: "ViT-Baseline-L"
+    config: configs/vit_baseline_m2f/coco/panoptic/vit_baseline_m2f_large_640.yaml
