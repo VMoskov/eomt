@@ -82,17 +82,32 @@ def apply_link_arguments(cfg: dict):
     num_classes = data_args.get("num_classes")
     stuff_cls   = data_args.get("stuff_classes")
 
+    def _accepts(class_path, param):
+        if not class_path:
+            return False
+        try:
+            cls = import_class(class_path)
+            return param in inspect.signature(cls.__init__).parameters
+        except Exception:
+            return False
+
     if img_size is not None:
         model_args.setdefault("img_size", img_size)
-        net = model_args.get("network", {}).get("init_args", {})
-        net.setdefault("img_size", img_size)
-        enc = net.get("encoder", {}).get("init_args", {})
-        enc.setdefault("img_size", img_size)
+        net_section = model_args.get("network", {})
+        net = net_section.get("init_args", {})
+        if _accepts(net_section.get("class_path"), "img_size"):
+            net.setdefault("img_size", img_size)
+        enc_section = net.get("encoder", {})
+        if enc_section and _accepts(enc_section.get("class_path"), "img_size"):
+            enc_section.setdefault("init_args", {})
+            enc_section["init_args"].setdefault("img_size", img_size)
 
     if num_classes is not None:
         model_args.setdefault("num_classes", num_classes)
-        net = model_args.get("network", {}).get("init_args", {})
-        net.setdefault("num_classes", num_classes)
+        net_section = model_args.get("network", {})
+        net = net_section.get("init_args", {})
+        if _accepts(net_section.get("class_path"), "num_classes"):
+            net.setdefault("num_classes", num_classes)
 
     if stuff_cls is not None:
         model_args.setdefault("stuff_classes", stuff_cls)
