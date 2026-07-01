@@ -1,5 +1,5 @@
 trainer:
-  max_epochs: 63
+  max_epochs: 60
   precision: "bf16-mixed"
   gradient_clip_val: 0.01
   strategy: ddp_find_unused_parameters_true
@@ -22,7 +22,7 @@ model:
   class_path: training.mask_classification_semantic.MaskClassificationSemantic
   init_args:
     attn_mask_annealing_enabled: False
-    windowed_inference: false
+    windowed_inference: true
     num_classes: 150
     img_size: [512, 512]
     lr: 2.0e-5

@@ -1,7 +1,8 @@
 trainer:
-  max_epochs: 62
+  max_epochs: 120
   precision: "bf16-mixed"
-  gradient_clip_val: 0.1
+  gradient_clip_val: 0.01
+  strategy: ddp_find_unused_parameters_true
   callbacks:
     - class_path: lightning.pytorch.callbacks.ModelCheckpoint
       init_args:
@@ -21,6 +22,7 @@ model:
   class_path: training.mask_classification_semantic.MaskClassificationSemantic
   init_args:
     attn_mask_annealing_enabled: False
+    windowed_inference: true
     num_classes: 150
     img_size: [512, 512]
     lr: 1.0e-4
